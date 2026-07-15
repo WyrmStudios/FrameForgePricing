@@ -1,0 +1,40 @@
+name: Update WFM Prices
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # every 4 hours
+  workflow_dispatch:         # allow manual trigger from the Actions tab
+
+jobs:
+  update-prices:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # needed to commit prices.json back to the repo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch prices
+        run: python fetch_prices.py
+
+      - name: Commit updated prices.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add prices.json
+          if git diff --staged --quiet; then
+            echo "prices.json unchanged — nothing to commit"
+          else
+            git commit -m "chore: update prices $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi
