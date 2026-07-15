@@ -51,10 +51,10 @@ def vwap(entries: list) -> int | None:
 
 
 def get(session: requests.Session, url: str) -> requests.Response | None:
-    """Rate-limited GET. Returns None on 404, raises on other errors."""
+    """Rate-limited GET. Returns None on 404/403, raises on other errors."""
     time.sleep(REQ_SLEEP)
     r = session.get(url)
-    if r.status_code == 404:
+    if r.status_code in (403, 404):
         return None
     r.raise_for_status()
     return r
@@ -127,8 +127,10 @@ def main() -> None:
     items = r.json()["data"]
     print(f"  {len(items)} items")
 
-    results: dict = {}
-    failed:  list = []
+    results:  dict = {}
+    skipped:  list = []   # 403/404 on statistics — WFM has no data for these
+    no_price: list = []   # statistics fetched but vwap is null (no trade history)
+    failed:   list = []   # unexpected HTTP error
 
     for idx, item in enumerate(items, 1):
         slug = item["slug"]
@@ -141,12 +143,14 @@ def main() -> None:
         try:
             stats = fetch_statistics(session, slug)
             if stats is None:
-                # Item exists in the list but WFM has no statistics — skip it.
+                skipped.append(slug)
                 continue
 
             orders = fetch_orders(session, slug)
-
             results[slug] = {"name": name, **stats, **(orders or {})}
+
+            if stats["vwap"] is None:
+                no_price.append(slug)
 
         except requests.HTTPError as exc:
             print(f"  HTTP {exc.response.status_code} — {slug}", file=sys.stderr)
@@ -158,6 +162,7 @@ def main() -> None:
     output = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "item_count":   len(results),
+        "with_price":   len(results) - len(no_price),
         "items":        results,
     }
 
@@ -165,12 +170,24 @@ def main() -> None:
         json.dump(output, f, separators=(",", ":"))
 
     size_kb = len(json.dumps(output, separators=(",", ":"))) / 1024
-    print(f"\nDone — {len(results)} items written ({size_kb:.0f} KB)")
+
+    print(f"\n── Summary ───────────────────────────────")
+    print(f"  Total WFM items:      {len(items)}")
+    print(f"  Written to JSON:      {len(results)}")
+    print(f"    with a price (vwap): {len(results) - len(no_price)}")
+    print(f"    no trade history:    {len(no_price)}")
+    print(f"  Skipped (403/404):    {len(skipped)}")
+    print(f"  Errors:               {len(failed)}")
+    print(f"  Output size:          {size_kb:.0f} KB")
+    print(f"──────────────────────────────────────────")
+
+    if no_price:
+        print(f"\nNo trade history (vwap=null): {no_price[:10]}")
+        if len(no_price) > 10:
+            print(f"  …and {len(no_price) - 10} more")
 
     if failed:
-        print(f"Failed ({len(failed)}): {failed[:20]}")
-        if len(failed) > 20:
-            print(f"  …and {len(failed) - 20} more")
+        print(f"\nErrors: {failed}", file=sys.stderr)
         sys.exit(1)
 
 
