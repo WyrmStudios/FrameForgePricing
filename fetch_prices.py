@@ -116,7 +116,7 @@ def fetch_orders(session: requests.Session, slug: str) -> dict | None:
 def main() -> None:
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "FrameForge-PriceFetcher/1.0 (github.com/WyrmStudios/FrameForge)",
+        "User-Agent": "FrameForge-CentralizedPriceCache/1.0 (github.com/WyrmStudios/FrameForgePricing)",
         "Accept":     "application/json",
         "Language":   "en",
     })
