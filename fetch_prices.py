@@ -4,9 +4,9 @@ Fetches WFM prices for all tradeable items (no riven auctions).
 Writes prices.json to the repo root, committed by GitHub Actions on a schedule.
 
 Output shape per item:
-  vwap          – primary price (48h VWAP if ≥3 trades, else 90d VWAP)
-  vwap_48h      – 48-hour volume-weighted average of daily medians
-  vwap_90d      – 90-day volume-weighted average of daily medians
+  vwap          – primary price: trimmed-median of 48h buckets (if ≥3 trades), else 90d
+  vwap_48h      – trimmed-median of 48-hour bucket medians
+  vwap_90d      – trimmed-median of 90-day bucket medians
   volume_48h    – total trades closed in last 48h
   volume_90d    – total trades closed in last 90d
   min_48h       – cheapest closed trade in 48h window
@@ -35,19 +35,27 @@ MIN_VOL_48H = 3      # if fewer trades than this in 48h, fall back to 90d for vw
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
-def vwap(entries: list) -> int | None:
-    """Volume-weighted average of per-bucket medians across all time buckets."""
-    total_vol = 0.0
-    weighted  = 0.0
-    for e in entries:
-        price = e.get("median")
-        vol   = float(e.get("volume") or 1)
-        if price is not None:
-            total_vol += vol
-            weighted  += price * vol
-    if total_vol == 0.0:
+def trimmed_median(entries: list, trim: float = 0.15) -> int | None:
+    """Trimmed median of per-bucket price medians.
+    Removes the bottom and top `trim` fraction by price before taking the median.
+    This filters single-trade outlier days (e.g. a Disruptor mod at 45 834 p)
+    without needing volume data. Falls back to the full-set median when there
+    are too few data points to trim.
+    """
+    prices = sorted(
+        e["median"] for e in entries
+        if e.get("median") is not None and e["median"] > 0
+    )
+    if not prices:
         return None
-    return round(weighted / total_vol)
+    n   = len(prices)
+    cut = int(n * trim)
+    lo, hi = cut, n - cut
+    slc = prices[lo:hi] if lo < hi else prices
+    mid = len(slc) // 2
+    if len(slc) % 2 == 0:
+        return round((slc[mid - 1] + slc[mid]) / 2)
+    return round(slc[mid])
 
 
 def get(session: requests.Session, url: str) -> requests.Response | None:
@@ -74,13 +82,13 @@ def fetch_statistics(session: requests.Session, slug: str) -> dict | None:
     vol_48h = sum(e.get("volume", 0) for e in h48)
     vol_90d = sum(e.get("volume", 0) for e in d90)
 
-    # Primary price: 48h VWAP when there are enough trades, otherwise 90d.
-    primary = vwap(h48) if vol_48h >= MIN_VOL_48H else vwap(d90)
+    # Primary price: trimmed-median of 48h buckets when enough trades, otherwise 90d.
+    primary = trimmed_median(h48) if vol_48h >= MIN_VOL_48H else trimmed_median(d90)
 
     return {
         "vwap":       primary,
-        "vwap_48h":   vwap(h48),
-        "vwap_90d":   vwap(d90),
+        "vwap_48h":   trimmed_median(h48),
+        "vwap_90d":   trimmed_median(d90),
         "volume_48h": int(vol_48h),
         "volume_90d": int(vol_90d),
         "min_48h":    min((e["min_price"] for e in h48 if "min_price" in e), default=None),
