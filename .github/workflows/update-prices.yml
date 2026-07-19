@@ -2,15 +2,14 @@ name: Update WFM Prices
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # daily fallback at 06:00 UTC — restarts the chain if it ever breaks
-  workflow_dispatch:       # manual trigger + self-trigger from the schedule-next-run step
+    - cron: '0 6,18 * * *'  # twice daily: 06:00 and 18:00 UTC
+  workflow_dispatch:          # manual trigger
 
 jobs:
   update-prices:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # commit prices.json
-      actions: write   # trigger the next run
 
     steps:
       - name: Checkout
@@ -39,12 +38,3 @@ jobs:
             git commit -m "chore: update prices $(date -u +%Y-%m-%dT%H:%MZ)"
             git push
           fi
-
-      - name: Schedule next run (30 min after completion)
-        if: always()  # keep the chain alive even if fetch or commit had errors
-        run: |
-          echo "Waiting 30 minutes before triggering next run…"
-          sleep 1800
-          gh workflow run update-prices.yml --ref main
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
