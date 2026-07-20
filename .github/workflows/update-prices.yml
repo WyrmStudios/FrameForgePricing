@@ -2,7 +2,7 @@ name: Update WFM Prices
 
 on:
   schedule:
-    - cron: '0 6,18 * * *'  # twice daily: 06:00 and 18:00 UTC
+    - cron: '0 4,16 * * *'  # twice daily: 06:00 and 18:00 GMT+2 (04:00 and 16:00 UTC)
   workflow_dispatch:          # manual trigger
 
 jobs:
