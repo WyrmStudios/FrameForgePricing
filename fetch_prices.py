@@ -58,14 +58,25 @@ def trimmed_median(entries: list, trim: float = 0.15) -> int | None:
     return round(slc[mid])
 
 
-def get(session: requests.Session, url: str) -> requests.Response | None:
-    """Rate-limited GET. Returns None on 404/403, raises on other errors."""
-    time.sleep(REQ_SLEEP)
-    r = session.get(url)
-    if r.status_code in (403, 404):
-        return None
-    r.raise_for_status()
-    return r
+def get(session: requests.Session, url: str, retries: int = 3) -> requests.Response | None:
+    """Rate-limited GET. Returns None on 404/403, raises on other errors.
+    Retries up to `retries` times on transient connection errors."""
+    for attempt in range(1, retries + 1):
+        time.sleep(REQ_SLEEP)
+        try:
+            r = session.get(url, timeout=30)
+            if r.status_code in (403, 404):
+                return None
+            r.raise_for_status()
+            return r
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            if attempt == retries:
+                raise
+            wait = 2 ** attempt  # 2s, 4s
+            print(f"  Retry {attempt}/{retries - 1} — {url.split('/')[-2]} ({exc.__class__.__name__}), "
+                  f"waiting {wait}s…", file=sys.stderr)
+            time.sleep(wait)
 
 
 # ─── per-item fetches ─────────────────────────────────────────────────────────
@@ -196,7 +207,11 @@ def main() -> None:
 
     if failed:
         print(f"\nErrors: {failed}", file=sys.stderr)
-        sys.exit(1)
+        threshold = max(5, int(len(items) * 0.01))
+        if len(failed) > threshold:
+            print(f"Failing: {len(failed)} errors exceeds threshold ({threshold})", file=sys.stderr)
+            sys.exit(1)
+        print(f"Continuing: {len(failed)} error(s) within acceptable threshold ({threshold})", file=sys.stderr)
 
 
 if __name__ == "__main__":
