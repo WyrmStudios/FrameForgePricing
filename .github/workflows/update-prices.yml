@@ -37,7 +37,6 @@ jobs:
           fi
 
       - name: Retry on failure
-        id: retry
         if: env.FETCH_FAILED == 'true'
         run: |
           sleep 30
@@ -64,9 +63,10 @@ jobs:
         if: env.FETCH_FAILED == 'true'
         run: exit 1
 
-      - name: Fetch items.json
+      - name: Fetch items.json (optional)
         run: |
-          curl -f --max-time 30 -o items.json "https://relics.run/items.json"
+          curl -f --max-time 30 -o items.json "https://relics.run/items.json" || \
+            echo "items.json not available — skipping (FrameForge uses slug heuristic as fallback)"
 
       - name: Commit updated files
         run: |
