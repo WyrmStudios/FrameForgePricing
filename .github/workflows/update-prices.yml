@@ -16,34 +16,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch price data (attempt 1)
-        id: attempt1
-        continue-on-error: true
+      - name: Fetch price data
+        id: fetch
         run: |
-          DATE=$(date -u +%Y-%m-%d)
-          curl -f --max-time 30 -o price_history_latest.json \
-            "https://relics.run/history/price_history_${DATE}.json"
-          echo "date=${DATE}" >> $GITHUB_OUTPUT
+          TODAY=$(date -u +%Y-%m-%d)
+          YESTERDAY=$(date -u -d "yesterday" +%Y-%m-%d)
 
-      - name: Fetch price data (attempt 2)
-        id: attempt2
-        if: steps.attempt1.outcome == 'failure'
-        continue-on-error: true
+          fetch_date() {
+            curl -f --max-time 30 -o price_history_latest.json \
+              "https://relics.run/history/price_history_${1}.json" 2>&1
+          }
+
+          # Try today, then yesterday (relics.run publishes the previous day's data)
+          if fetch_date "$TODAY"; then
+            echo "Fetched today's data ($TODAY)"
+          elif fetch_date "$YESTERDAY"; then
+            echo "Fetched yesterday's data ($YESTERDAY) — today's not published yet"
+          else
+            echo "FETCH_FAILED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Retry on failure
+        id: retry
+        if: env.FETCH_FAILED == 'true'
         run: |
-          DATE=$(date -u +%Y-%m-%d)
           sleep 30
-          curl -f --max-time 30 -o price_history_latest.json \
-            "https://relics.run/history/price_history_${DATE}.json"
+          TODAY=$(date -u +%Y-%m-%d)
+          YESTERDAY=$(date -u -d "yesterday" +%Y-%m-%d)
+
+          fetch_date() {
+            curl -f --max-time 30 -o price_history_latest.json \
+              "https://relics.run/history/price_history_${1}.json" 2>&1
+          }
+
+          if fetch_date "$TODAY" || fetch_date "$YESTERDAY"; then
+            echo "FETCH_FAILED=" >> $GITHUB_ENV
+          fi
 
       - name: Notify Discord on double failure
-        if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
+        if: env.FETCH_FAILED == 'true'
         run: |
           curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d "{\"content\": \"⚠️ **FrameForgePricing**: Failed to fetch price data from relics.run after 2 attempts (date: $(date -u +%Y-%m-%d)). Users will see stale prices until this is resolved.\"}"
+            -d "{\"content\": \"⚠️ **FrameForgePricing**: Failed to fetch price data from relics.run after 2 attempts ($(date -u +%Y-%m-%d)). Users will see stale prices until this is resolved.\"}"
 
       - name: Fail job if both attempts failed
-        if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
+        if: env.FETCH_FAILED == 'true'
         run: exit 1
 
       - name: Fetch items.json
