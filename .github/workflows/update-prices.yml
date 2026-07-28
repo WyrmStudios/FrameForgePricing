@@ -63,10 +63,10 @@ jobs:
         if: env.FETCH_FAILED == 'true'
         run: exit 1
 
-      - name: Fetch items.json (optional)
+      - name: Fetch items.json
         run: |
-          curl -f --max-time 30 -o items.json "https://relics.run/items.json" || \
-            echo "items.json not available — skipping (FrameForge uses slug heuristic as fallback)"
+          curl -f --max-time 30 -o items.json \
+            "https://relics.run/history/item_data/items.json"
 
       - name: Commit updated files
         run: |
