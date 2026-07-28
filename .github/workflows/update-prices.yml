@@ -1,40 +1,63 @@
-name: Update WFM Prices
+name: Mirror relics.run Price Data
 
 on:
   schedule:
-    - cron: '0 4,16 * * *'  # twice daily: 06:00 and 18:00 GMT+2 (04:00 and 16:00 UTC)
-  workflow_dispatch:          # manual trigger
+    - cron: '0 6 * * *'   # 06:00 UTC
+    - cron: '0 18 * * *'  # 18:00 UTC
+  workflow_dispatch:
 
 jobs:
-  update-prices:
+  mirror:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # commit prices.json
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+      - name: Fetch price data (attempt 1)
+        id: attempt1
+        continue-on-error: true
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          curl -f --max-time 30 -o price_history_latest.json \
+            "https://relics.run/history/price_history_${DATE}.json"
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Fetch price data (attempt 2)
+        id: attempt2
+        if: steps.attempt1.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          sleep 30
+          curl -f --max-time 30 -o price_history_latest.json \
+            "https://relics.run/history/price_history_${DATE}.json"
 
-      - name: Fetch prices
-        run: python fetch_prices.py
+      - name: Notify Discord on double failure
+        if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\": \"⚠️ **FrameForgePricing**: Failed to fetch price data from relics.run after 2 attempts (date: $(date -u +%Y-%m-%d)). Users will see stale prices until this is resolved.\"}"
 
-      - name: Commit updated prices.json
+      - name: Fail job if both attempts failed
+        if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
+        run: exit 1
+
+      - name: Fetch items.json
+        run: |
+          curl -f --max-time 30 -o items.json "https://relics.run/items.json"
+
+      - name: Commit updated files
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add prices.json
+          git add price_history_latest.json items.json
           if git diff --staged --quiet; then
-            echo "prices.json unchanged — nothing to commit"
+            echo "No changes to commit"
           else
-            git commit -m "chore: update prices $(date -u +%Y-%m-%dT%H:%MZ)"
+            git commit -m "chore: mirror relics.run data $(date -u +%Y-%m-%d)"
             git push
           fi
