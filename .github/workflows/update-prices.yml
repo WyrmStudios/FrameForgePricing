@@ -22,18 +22,39 @@ jobs:
           TODAY=$(date -u +%Y-%m-%d)
           YESTERDAY=$(date -u -d "yesterday" +%Y-%m-%d)
 
+          # Fetches into price_history_latest.json, sets HTTP_CODE to the
+          # response status (or "000" if curl couldn't connect at all).
           fetch_date() {
-            curl -f --max-time 30 -o price_history_latest.json \
-              "https://relics.run/history/price_history_${1}.json" 2>&1
+            HTTP_CODE=$(curl -s -o price_history_latest.json -w "%{http_code}" --max-time 30 \
+              "https://relics.run/history/price_history_${1}.json")
+            [ "$HTTP_CODE" = "200" ]
           }
 
-          # Try today, then yesterday (relics.run publishes the previous day's data)
-          if fetch_date "$TODAY"; then
+          # Turns a raw HTTP code into a reason a human can act on.
+          describe() {
+            case "$1" in
+              404) echo "not published yet (404)" ;;
+              000) echo "no response / connection failed" ;;
+              5??) echo "server error (HTTP $1)" ;;
+              *)   echo "HTTP $1" ;;
+            esac
+          }
+
+          fetch_date "$TODAY"; TODAY_CODE=$HTTP_CODE
+          if [ "$TODAY_CODE" = "200" ]; then
             echo "Fetched today's data ($TODAY)"
-          elif fetch_date "$YESTERDAY"; then
-            echo "Fetched yesterday's data ($YESTERDAY) — today's not published yet"
           else
-            echo "FETCH_FAILED=true" >> $GITHUB_ENV
+            fetch_date "$YESTERDAY"; YEST_CODE=$HTTP_CODE
+            if [ "$YEST_CODE" = "200" ]; then
+              echo "Fetched yesterday's data ($YESTERDAY) — today's ($TODAY) $(describe "$TODAY_CODE")"
+            else
+              echo "FETCH_FAILED=true" >> $GITHUB_ENV
+              {
+                echo "FETCH_ERROR<<EOF"
+                echo "today ($TODAY): $(describe "$TODAY_CODE") · yesterday ($YESTERDAY): $(describe "$YEST_CODE")"
+                echo "EOF"
+              } >> $GITHUB_ENV
+            fi
           fi
 
       - name: Retry on failure
@@ -44,12 +65,34 @@ jobs:
           YESTERDAY=$(date -u -d "yesterday" +%Y-%m-%d)
 
           fetch_date() {
-            curl -f --max-time 30 -o price_history_latest.json \
-              "https://relics.run/history/price_history_${1}.json" 2>&1
+            HTTP_CODE=$(curl -s -o price_history_latest.json -w "%{http_code}" --max-time 30 \
+              "https://relics.run/history/price_history_${1}.json")
+            [ "$HTTP_CODE" = "200" ]
           }
 
-          if fetch_date "$TODAY" || fetch_date "$YESTERDAY"; then
+          describe() {
+            case "$1" in
+              404) echo "not published yet (404)" ;;
+              000) echo "no response / connection failed" ;;
+              5??) echo "server error (HTTP $1)" ;;
+              *)   echo "HTTP $1" ;;
+            esac
+          }
+
+          fetch_date "$TODAY"; TODAY_CODE=$HTTP_CODE
+          if [ "$TODAY_CODE" = "200" ]; then
             echo "FETCH_FAILED=" >> $GITHUB_ENV
+          else
+            fetch_date "$YESTERDAY"; YEST_CODE=$HTTP_CODE
+            if [ "$YEST_CODE" = "200" ]; then
+              echo "FETCH_FAILED=" >> $GITHUB_ENV
+            else
+              {
+                echo "FETCH_ERROR<<EOF"
+                echo "today ($TODAY): $(describe "$TODAY_CODE") · yesterday ($YESTERDAY): $(describe "$YEST_CODE") (after retry)"
+                echo "EOF"
+              } >> $GITHUB_ENV
+            fi
           fi
 
       - name: Notify Discord on double failure
@@ -57,7 +100,7 @@ jobs:
         run: |
           curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d "{\"content\": \"⚠️ **FrameForgePricing**: Failed to fetch price data from relics.run after 2 attempts ($(date -u +%Y-%m-%d)). Users will see stale prices until this is resolved.\"}"
+            -d "{\"content\": \"⚠️ **FrameForgePricing**: Failed to fetch price data from relics.run after 2 attempts ($(date -u +%Y-%m-%d)).\n${{ env.FETCH_ERROR }}\nUsers will see stale prices until this is resolved.\"}"
 
       - name: Fail job if both attempts failed
         if: env.FETCH_FAILED == 'true'
